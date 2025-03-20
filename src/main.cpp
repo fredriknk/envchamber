@@ -2,23 +2,34 @@
 #include <OneWire.h>
 
 #define HEATPIN 5
-#define COOLPIN 3
+#define COOLPIN Q0_1
 #define COOLLIGHT 9
 #define HEATLIGHT 10
 
-OneWire  ds(2);  // on pin 10 (a 4.7K resistor is necessary)
-uint32_t time_now = millis();
-uint32_t last_temp_time = 0;
-uint32_t last_correction = 0;
-float setpoint = 20.0; 
-float old_setpoint = 21.0;
-bool first = true;
 bool heating = false;
 bool cooling = false;
 
 
+OneWire  ds(2);  // on pin 10 (a 4.7K resistor is necessary)
+uint32_t time_now = millis();
+
 void setup(void) {
   Serial.begin(9600);
+  delay(2000);
+  byte addr[8];
+  int deviceCount = 0;
+  while (ds.search(addr)) {
+    Serial.print("Device ");
+    Serial.print(deviceCount);
+    Serial.print(": ");
+    for (int i = 0; i < 8; i++) {
+      if (addr[i] < 16) Serial.print("0");
+      Serial.print(addr[i], HEX);
+      Serial.print(" ");
+    }
+    Serial.println();
+    deviceCount++;
+  }
 }
 
 void start_conversion(byte addr[8]){
@@ -109,20 +120,25 @@ void cooloff(){
 }
 
 void stop_h(){
-  cooling = false;
-  heating = false;
-  digitalWrite(HEATPIN, LOW);
-  digitalWrite(COOLPIN, LOW);
-  digitalWrite(HEATLIGHT, LOW);
-  digitalWrite(COOLLIGHT, LOW);
+  cooloff();
+  heatoff();
 }
 
+uint32_t last_temp_time = 0;
+uint32_t last_correction = 0;
+float setpoint = -20.0; 
+float old_setpoint = 21.0;
+bool first = true;
+
+byte i;
+byte data[9];
+byte addr_heater[8] = {0x28, 0xB8, 0xEB, 0xFC, 0x0D, 0x00, 0x00, 0x61,};
+//sensor 2 28 BB ED FC 0D 00 00 A4
+byte addr_temp[8]= {0x28,0xBB,0xED,0xFC,0x0D,0x00,0x00,0xA4};
+float heatertemp, chambertemp;
 
 void loop(void) {
-  byte i;
-  byte data[9];
-  byte addr[8] = {0x28, 0xB8, 0xEB, 0xFC, 0x0D, 0x00, 0x00, 0x61,};
-  float celsius, fahrenheit;
+
   time_now = millis();
 
   if (Serial.available() > 0) {
@@ -133,39 +149,59 @@ void loop(void) {
       }
   }
   
-  start_conversion(addr);
+  start_conversion(addr_heater);
+  start_conversion(addr_temp);
   delay(1000);
-  celsius = get_data(addr);
+  heatertemp = get_data(addr_heater);
+  chambertemp = get_data(addr_temp);
 
-  Serial.print("Temp:");
-  Serial.print(celsius);
-  Serial.print(" ");
-  Serial.print("Setpoint:");
+  Serial.print("{\"Temp_chamber\":");
+  Serial.print(chambertemp);
+  Serial.print(",");
+  Serial.print("\"Temp_heater\":");
+  Serial.print(heatertemp);
+  Serial.print(",");
+  Serial.print("\"Setpoint\":");
   Serial.print(setpoint);
-  Serial.print(" Heating:");
+  Serial.print(",");
+  Serial.print("\"Heating\":");
   Serial.print(heating);
-  Serial.print(" Cooling:");
-  Serial.println(cooling);
-  
-  if(setpoint < celsius-3){
-    heatoff();
-    coolon();
+  Serial.print(",");
+  Serial.print("\"Cooling\":");
+  Serial.print(cooling);
+  Serial.print("\"last_temp_time:\"");
+  Serial.print(time_now - last_temp_time);
+  Serial.print("}\n");
+
+  if(chambertemp > setpoint+1 ){
+    if(((time_now - last_temp_time) > 300000||first == true) && cooling == false){
+      first = false;
+      last_temp_time = millis();
+      coolon();
+    }
   }
   else{
-    if((time_now - last_temp_time) > 60000){
+    if(((time_now - last_temp_time) > 300000||first == true) &&  cooling == true){
+      first = false;
       last_temp_time = millis();
       cooloff();
     }
   }
   
-  if(setpoint > celsius){
-    cooloff();
-    heaton();
+  if( cooling == false){
+    if(setpoint > heatertemp){
+      heaton();
+    }
+    else{
+      heatoff();
+    }
   }
   else{
-    heatoff();
+    if(setpoint > chambertemp && setpoint+2 > heatertemp){
+      heaton();
+    }
+    else{
+      heatoff();
+    }
   }
- 
-  
-  
 }
